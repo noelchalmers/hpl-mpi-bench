@@ -196,20 +196,20 @@ void HPL_pdlaswp_exchange(HPL_T_panel* PANEL, const HPL_T_UPD UPD) {
     double gatherTimeRoot=0.;
     int nroot = 0;
 
-    if (PANEL->grid->mycol==0 && PANEL->grid->myrow==0) {
-      MPI_Irecv(&scatterTimeRoot, 1, MPI_DOUBLE, MModAdd1(PANEL->pcol, PANEL->grid->npcol), 0, PANEL->grid->row_comm, request+0);
-      MPI_Irecv(&gatherTimeRoot,  1, MPI_DOUBLE, MModAdd1(PANEL->pcol, PANEL->grid->npcol), 1, PANEL->grid->row_comm, request+1);
-      MPI_Irecv(&nroot,  1, MPI_INT, MModAdd1(PANEL->pcol, PANEL->grid->npcol), 2, PANEL->grid->row_comm, request+2);
-    }
-    if (PANEL->grid->mycol==MModAdd1(PANEL->pcol, PANEL->grid->npcol) && PANEL->grid->myrow==0) {
-      MPI_Send(&scatter_time, 1, MPI_DOUBLE, 0, 0, PANEL->grid->row_comm);
-      MPI_Send(&gather_time,  1, MPI_DOUBLE, 0, 1, PANEL->grid->row_comm);
-      MPI_Send(&n,  1, MPI_INT, 0, 2, PANEL->grid->row_comm);
-    }
+    // Total time for this col's scaller is the max over the col
+    double scatter_time_total=0.;
+    MPI_Reduce(&scatter_time, &scatter_time_total, 1, MPI_DOUBLE, MPI_MAX, 0, PANEL->grid->col_comm);
+
+    // Total time for this col's scaller is the max over the col
+    double gather_time_total=0.;
+    MPI_Reduce(&gather_time, &gather_time_total, 1, MPI_DOUBLE, MPI_MAX, 0, PANEL->grid->col_comm);
+
+    // Only one column should have done the lookahead, so just max over the row
+    MPI_Reduce(&scatter_time_total, &scatterTimeRoot, 1, MPI_DOUBLE, MPI_MAX, 0, PANEL->grid->row_comm);
+    MPI_Reduce(&gather_time_total, &gatherTimeRoot, 1, MPI_DOUBLE, MPI_MAX, 0, PANEL->grid->row_comm);
+    MPI_Reduce(&n, &nroot, 1, MPI_INT, MPI_MAX, 0, PANEL->grid->row_comm);
 
     if (PANEL->grid->mycol==0 && PANEL->grid->myrow==0) {
-      MPI_Waitall(3, request, MPI_STATUSES_IGNORE);
-
       if (scatterTimeRoot>0.0) {
         printf("Plaswp: Size (%5d x %4d), LookAhead Column %3d,                    Scatter Time (ms) =            %8.3f,                        BW Est (GB/s) = %6.2f\n",
                 nroot, nroot,
@@ -232,29 +232,40 @@ void HPL_pdlaswp_exchange(HPL_T_panel* PANEL, const HPL_T_UPD UPD) {
   int nq_max=0;
   MPI_Reduce(&n, &nq_max, 1, MPI_INT, MPI_MAX, 0, PANEL->grid->row_comm);
 
+  // Total time for this col's scaller is the max over the col
+  double scatter_time_total=0.;
+  MPI_Reduce(&scatter_time, &scatter_time_total, 1, MPI_DOUBLE, MPI_MAX, 0, PANEL->grid->col_comm);
+
+  // Min max avg over all cols' scatters
   double scatter_time_avg=0.;
   double scatter_time_min=0.;
   double scatter_time_max=0.;
   double scatter_time_stddev=0.;
 
-  MPI_Reduce(&scatter_time, &scatter_time_avg, 1, MPI_DOUBLE, MPI_SUM, 0, PANEL->grid->row_comm);
-  MPI_Reduce(&scatter_time, &scatter_time_min, 1, MPI_DOUBLE, MPI_MIN, 0, PANEL->grid->row_comm);
-  MPI_Reduce(&scatter_time, &scatter_time_max, 1, MPI_DOUBLE, MPI_MAX, 0, PANEL->grid->row_comm);
+  MPI_Allreduce(&scatter_time_total, &scatter_time_avg, 1, MPI_DOUBLE, MPI_SUM, PANEL->grid->row_comm);
+  MPI_Reduce(&scatter_time_total, &scatter_time_min, 1, MPI_DOUBLE, MPI_MIN, 0, PANEL->grid->row_comm);
+  MPI_Reduce(&scatter_time_total, &scatter_time_max, 1, MPI_DOUBLE, MPI_MAX, 0, PANEL->grid->row_comm);
   scatter_time_avg /= PANEL->grid->npcol;
 
-  double scatter_var = (scatter_time - scatter_time_avg)*(scatter_time - scatter_time_avg);
+  double scatter_var = (scatter_time_total - scatter_time_avg)*(scatter_time_total - scatter_time_avg);
   MPI_Reduce(&scatter_var, &scatter_time_stddev, 1, MPI_DOUBLE, MPI_SUM, 0, PANEL->grid->row_comm);
   scatter_time_stddev /= PANEL->grid->npcol;
   scatter_time_stddev = sqrt(scatter_time_stddev);
 
+
+  // Total time for this col's scaller is the max over the col
+  double gather_time_total=0.;
+  MPI_Reduce(&gather_time, &gather_time_total, 1, MPI_DOUBLE, MPI_MAX, 0, PANEL->grid->col_comm);
+
+  // Min max avg over all cols' gathers
   double gather_time_avg=0.;
   double gather_time_min=0.;
   double gather_time_max=0.;
   double gather_time_stddev=0.;
 
-  MPI_Reduce(&gather_time, &gather_time_avg, 1, MPI_DOUBLE, MPI_SUM, 0, PANEL->grid->row_comm);
-  MPI_Reduce(&gather_time, &gather_time_min, 1, MPI_DOUBLE, MPI_MIN, 0, PANEL->grid->row_comm);
-  MPI_Reduce(&gather_time, &gather_time_max, 1, MPI_DOUBLE, MPI_MAX, 0, PANEL->grid->row_comm);
+  MPI_Allreduce(&gather_time_total, &gather_time_avg, 1, MPI_DOUBLE, MPI_SUM, PANEL->grid->row_comm);
+  MPI_Reduce(&gather_time_total, &gather_time_min, 1, MPI_DOUBLE, MPI_MIN, 0, PANEL->grid->row_comm);
+  MPI_Reduce(&gather_time_total, &gather_time_max, 1, MPI_DOUBLE, MPI_MAX, 0, PANEL->grid->row_comm);
   gather_time_avg /= PANEL->grid->npcol;
 
   double gather_var = (gather_time - gather_time_avg)*(gather_time - gather_time_avg);
@@ -262,60 +273,17 @@ void HPL_pdlaswp_exchange(HPL_T_panel* PANEL, const HPL_T_UPD UPD) {
   gather_time_stddev /= PANEL->grid->npcol;
   gather_time_stddev = sqrt(gather_time_stddev);
 
-  MPI_Request request[4];
-  double scatterTimeAvgRoot=0.;
-  double scatterTimeMinRoot=0.;
-  double scatterTimeMaxRoot=0.;
-  double scatterTimeStdDevRoot=0.;
-
   if (PANEL->grid->mycol==0 && PANEL->grid->myrow==0) {
-    MPI_Irecv(&scatterTimeAvgRoot,    1, MPI_DOUBLE, PANEL->prow, 0, PANEL->grid->col_comm, request+0);
-    MPI_Irecv(&scatterTimeMinRoot,    1, MPI_DOUBLE, PANEL->prow, 1, PANEL->grid->col_comm, request+1);
-    MPI_Irecv(&scatterTimeMaxRoot,    1, MPI_DOUBLE, PANEL->prow, 2, PANEL->grid->col_comm, request+2);
-    MPI_Irecv(&scatterTimeStdDevRoot, 1, MPI_DOUBLE, PANEL->prow, 3, PANEL->grid->col_comm, request+3);
-  }
-  if (PANEL->grid->mycol==0 && PANEL->grid->myrow==PANEL->prow) {
-    MPI_Send(&scatter_time_avg,    1, MPI_DOUBLE, 0, 0, PANEL->grid->col_comm);
-    MPI_Send(&scatter_time_min,    1, MPI_DOUBLE, 0, 1, PANEL->grid->col_comm);
-    MPI_Send(&scatter_time_max,    1, MPI_DOUBLE, 0, 2, PANEL->grid->col_comm);
-    MPI_Send(&scatter_time_stddev, 1, MPI_DOUBLE, 0, 3, PANEL->grid->col_comm);
-  }
-
-  if (PANEL->grid->mycol==0 && PANEL->grid->myrow==0) {
-    MPI_Waitall(4, request, MPI_STATUSES_IGNORE);
-
-    if (scatterTimeMaxRoot>0.0) {
+    if (scatter_time_max>0.0) {
       printf("Plaswp: Size (%5d x %4d), RootRow    %3d, Scatter Time (ms) (min, avg+/-stddev, max) = (%8.3f, %8.3f +/-%8.3f, %8.3f), BW Est (GB/s) = %6.2f\n",
-              nq_max, PANEL->jb, PANEL->prow, scatterTimeMinRoot, scatterTimeAvgRoot, scatterTimeStdDevRoot, scatterTimeMaxRoot,
-              nq_max*PANEL->jb*8/(1.0E6*scatterTimeAvgRoot));
+              nq_max, PANEL->jb, PANEL->prow, scatter_time_min, scatter_time_avg, scatter_time_stddev, scatter_time_max,
+              nq_max*PANEL->jb*8/(1.0E6*scatter_time_avg));
     }
-  }
 
-  double gatherTimeAvgRoot=0.;
-  double gatherTimeMinRoot=0.;
-  double gatherTimeMaxRoot=0.;
-  double gatherTimeStdDevRoot=0.;
-
-  if (PANEL->grid->mycol==0 && PANEL->grid->myrow==0) {
-    MPI_Irecv(&gatherTimeAvgRoot,    1, MPI_DOUBLE, PANEL->prow, 0, PANEL->grid->col_comm, request+0);
-    MPI_Irecv(&gatherTimeMinRoot,    1, MPI_DOUBLE, PANEL->prow, 1, PANEL->grid->col_comm, request+1);
-    MPI_Irecv(&gatherTimeMaxRoot,    1, MPI_DOUBLE, PANEL->prow, 2, PANEL->grid->col_comm, request+2);
-    MPI_Irecv(&gatherTimeStdDevRoot, 1, MPI_DOUBLE, PANEL->prow, 3, PANEL->grid->col_comm, request+3);
-  }
-  if (PANEL->grid->mycol==0 && PANEL->grid->myrow==PANEL->prow) {
-    MPI_Send(&gather_time_avg,    1, MPI_DOUBLE, 0, 0, PANEL->grid->col_comm);
-    MPI_Send(&gather_time_min,    1, MPI_DOUBLE, 0, 1, PANEL->grid->col_comm);
-    MPI_Send(&gather_time_max,    1, MPI_DOUBLE, 0, 2, PANEL->grid->col_comm);
-    MPI_Send(&gather_time_stddev, 1, MPI_DOUBLE, 0, 3, PANEL->grid->col_comm);
-  }
-
-  if (PANEL->grid->mycol==0 && PANEL->grid->myrow==0) {
-    MPI_Waitall(4, request, MPI_STATUSES_IGNORE);
-
-    if (gatherTimeMaxRoot>0.0) {
+    if (gather_time_max>0.0) {
       printf("Plaswp: Size (%5d x %4d), RootRow    %3d,  Gather Time (ms) (min, avg+/-stddev, max) = (%8.3f, %8.3f +/-%8.3f, %8.3f), BW Est (GB/s) = %6.2f\n",
-              nq_max, PANEL->jb, PANEL->prow, gatherTimeMinRoot, gatherTimeAvgRoot, gatherTimeStdDevRoot, gatherTimeMaxRoot,
-              nq_max*PANEL->jb*8/(1.0E6*gatherTimeAvgRoot));
+              nq_max, PANEL->jb, PANEL->prow, gather_time_min, gather_time_avg, gather_time_stddev, gather_time_max,
+              nq_max*PANEL->jb*8/(1.0E6*gather_time_avg));
     }
   }
 

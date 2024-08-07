@@ -57,17 +57,22 @@ int HPL_pdpanel_bcast(HPL_T_panel* PANEL) {
 
     double bcast_time = std::chrono::duration_cast<std::chrono::microseconds>(bcast_end - bcast_start).count()/1000.0;
 
+    // Total time for this row's bcast is the max over the row
+    double bcast_time_total=0.;
+    MPI_Reduce(&bcast_time, &bcast_time_total, 1, MPI_DOUBLE, MPI_MAX, 0, PANEL->grid->row_comm);
+
+    // Min max avg over all rows' bcast
     double bcast_time_avg=0.;
     double bcast_time_min=0.;
     double bcast_time_max=0.;
     double bcast_time_stddev=0.;
 
-    MPI_Reduce(&bcast_time, &bcast_time_avg, 1, MPI_DOUBLE, MPI_SUM, 0, PANEL->grid->col_comm);
-    MPI_Reduce(&bcast_time, &bcast_time_min, 1, MPI_DOUBLE, MPI_MIN, 0, PANEL->grid->col_comm);
-    MPI_Reduce(&bcast_time, &bcast_time_max, 1, MPI_DOUBLE, MPI_MAX, 0, PANEL->grid->col_comm);
+    MPI_Allreduce(&bcast_time_total, &bcast_time_avg, 1, MPI_DOUBLE, MPI_SUM, PANEL->grid->col_comm);
+    MPI_Reduce(&bcast_time_total, &bcast_time_min, 1, MPI_DOUBLE, MPI_MIN, 0, PANEL->grid->col_comm);
+    MPI_Reduce(&bcast_time_total, &bcast_time_max, 1, MPI_DOUBLE, MPI_MAX, 0, PANEL->grid->col_comm);
     bcast_time_avg /= PANEL->grid->nprow;
 
-    double bcast_var = (bcast_time - bcast_time_avg)*(bcast_time - bcast_time_avg);
+    double bcast_var = (bcast_time_total - bcast_time_avg)*(bcast_time_total - bcast_time_avg);
     MPI_Reduce(&bcast_var, &bcast_time_stddev, 1, MPI_DOUBLE, MPI_SUM, 0, PANEL->grid->col_comm);
     bcast_time_stddev /= PANEL->grid->nprow;
     bcast_time_stddev = sqrt(bcast_time_stddev);
@@ -75,31 +80,10 @@ int HPL_pdpanel_bcast(HPL_T_panel* PANEL) {
     int mp_max=0;
     MPI_Reduce(&PANEL->mp, &mp_max, 1, MPI_INT, MPI_MAX, 0, PANEL->grid->col_comm);
 
-    MPI_Request request[4];
-    double bcastTimeAvgRoot=0.;
-    double bcastTimeMinRoot=0.;
-    double bcastTimeMaxRoot=0.;
-    double bcastTimeStdDevRoot=0.;
-
     if (PANEL->grid->mycol==0 && PANEL->grid->myrow==0) {
-      MPI_Irecv(&bcastTimeAvgRoot,    1, MPI_DOUBLE, PANEL->pcol, 0, PANEL->grid->row_comm, request+0);
-      MPI_Irecv(&bcastTimeMinRoot,    1, MPI_DOUBLE, PANEL->pcol, 1, PANEL->grid->row_comm, request+1);
-      MPI_Irecv(&bcastTimeMaxRoot,    1, MPI_DOUBLE, PANEL->pcol, 2, PANEL->grid->row_comm, request+2);
-      MPI_Irecv(&bcastTimeStdDevRoot, 1, MPI_DOUBLE, PANEL->pcol, 3, PANEL->grid->row_comm, request+3);
-    }
-    if (PANEL->grid->mycol==PANEL->pcol && PANEL->grid->myrow==0) {
-      MPI_Send(&bcast_time_avg,    1, MPI_DOUBLE, 0, 0, PANEL->grid->row_comm);
-      MPI_Send(&bcast_time_min,    1, MPI_DOUBLE, 0, 1, PANEL->grid->row_comm);
-      MPI_Send(&bcast_time_max,    1, MPI_DOUBLE, 0, 2, PANEL->grid->row_comm);
-      MPI_Send(&bcast_time_stddev, 1, MPI_DOUBLE, 0, 3, PANEL->grid->row_comm);
-    }
-
-    if (PANEL->grid->mycol==0 && PANEL->grid->myrow==0) {
-      MPI_Waitall(4, request, MPI_STATUSES_IGNORE);
-
       printf("LBcast: Size (%5d x %4d), RootColumn %3d,   Bcast Time (ms) (min, avg+/-stddev, max) = (%8.3f, %8.3f +/-%8.3f, %8.3f), BW Est (GB/s) = %6.2f\n",
-              mp_max, PANEL->jb, PANEL->pcol, bcastTimeMinRoot, bcastTimeAvgRoot, bcastTimeStdDevRoot, bcastTimeMaxRoot,
-              mp_max*PANEL->jb*8/(1.0E6*bcastTimeAvgRoot));
+              mp_max, PANEL->jb, PANEL->pcol, bcast_time_min, bcast_time_avg, bcast_time_stddev, bcast_time_max,
+              mp_max*PANEL->jb*8/(1.0E6*bcast_time_avg));
     }
   }
 
